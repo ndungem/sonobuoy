@@ -27,6 +27,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -362,8 +363,16 @@ func (r *Reader) PluginResultsItem(plugin string) (*Item, error) {
 
 // PluginResultsReader returns the results file from the given plugin if found, error otherwise.
 func (r *Reader) PluginResultsReader(plugin string) (io.Reader, error) {
-	resultsPath := path.Join(PluginsDir, plugin, PostProcessedResultsFile)
-	return r.FileReader(resultsPath)
+
+	if runtime.GOOS == "windows" {
+		resultsPath := filepath.Join(PluginsDir, plugin, PostProcessedResultsFile)
+		print(resultsPath)
+		return r.FileReader(resultsPath)
+	} else {
+		resultsPath := path.Join(PluginsDir, plugin, PostProcessedResultsFile)
+		return r.FileReader(resultsPath)
+
+	}
 }
 
 // FileReader returns a reader for a file in the archive.
@@ -376,7 +385,9 @@ func (r *Reader) FileReader(filename string) (io.Reader, error) {
 			if err != nil || found {
 				return err
 			}
-
+			if runtime.GOOS == "windows" {
+				path = strings.ReplaceAll(path, "/", "\\")
+			}
 			if path == filename {
 				found = true
 				reader, ok := info.Sys().(io.Reader)
