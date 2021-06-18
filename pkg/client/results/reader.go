@@ -387,6 +387,7 @@ func (r *Reader) FileReader(filename string) (io.Reader, error) {
 			}
 			if runtime.GOOS == "windows" {
 				path = strings.ReplaceAll(path, "/", "\\")
+				filename = strings.ReplaceAll(filename, "/", "\\")
 			}
 			if path == filename {
 				found = true
