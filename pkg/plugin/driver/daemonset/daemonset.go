@@ -43,8 +43,9 @@ const (
 
 	// defaultSleepSeconds is the time after the plugin finishes for which Sonobuoy will sleep.
 	// The sleep functions as a way to prevent the daemonset from restarting the container once the
-	// process completes. There is currently no way to have a "run-once daemonset".
-	defaultSleepSeconds = "3600"
+	// process completes. There is currently no way to have a "run-once daemonset". Defaults
+	// to sleeping forever.
+	defaultSleepSeconds = "-1"
 )
 
 // Plugin is a plugin driver that dispatches containers to each node,
@@ -267,7 +268,7 @@ func (p *Plugin) Monitor(ctx context.Context, kubeclient kubernetes.Interface, a
 			// nodes have returned results to the aggregator. We can report the error for every node though
 			// since the aggregator will throw out duplicate results.
 			case ctx.Err() == context.DeadlineExceeded:
-				logrus.Errorf("Timeout waiting for plugin %v", p.GetName())
+				logrus.Errorf("Timeout waiting for plugin %v. Try checking the pod logs and other data in the results tarball for more information.", p.GetName())
 				errs := makeErrorResultsForNodes(
 					p.GetName(),
 					map[string]interface{}{"error": plugin.TimeoutErrMsg},

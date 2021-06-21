@@ -33,7 +33,6 @@ import (
 	"github.com/vmware-tanzu/sonobuoy/pkg/plugin/driver"
 	"github.com/vmware-tanzu/sonobuoy/pkg/plugin/manifest"
 	manifesthelper "github.com/vmware-tanzu/sonobuoy/pkg/plugin/manifest/helper"
-	"github.com/vmware-tanzu/sonobuoy/pkg/templates"
 
 	corev1 "k8s.io/api/core/v1"
 )
@@ -61,6 +60,9 @@ type templateValues struct {
 	SSHUser           string
 
 	NodeSelectors map[string]string
+
+	// configmap name, filename, string
+	ConfigMaps map[string]map[string]string
 
 	// CustomRegistries should be a multiline yaml string which represents
 	// the file contents of KUBE_TEST_REPO_LIST, the overrides for k8s e2e
@@ -129,6 +131,30 @@ func (*SonobuoyClient) GenerateManifest(cfg *GenConfig) ([]byte, error) {
 		return strings.ToLower(plugins[i].SonobuoyConfig.PluginName) < strings.ToLower(plugins[j].SonobuoyConfig.PluginName)
 	})
 
+	// If they have a configmap, associate the plugin with that configmap for mounting.
+	configs := map[string]map[string]string{}
+	for _, p := range plugins {
+		if len(p.ConfigMap) == 0 {
+			continue
+		}
+		configs[p.SonobuoyConfig.PluginName] = p.ConfigMap
+		p.ExtraVolumes = append(p.ExtraVolumes,
+			manifest.Volume{
+				Volume: corev1.Volume{
+					Name: fmt.Sprintf("sonobuoy-%v-vol", p.SonobuoyConfig.PluginName),
+					VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{Name: fmt.Sprintf("plugin-%v-cm", p.SonobuoyConfig.PluginName)},
+					}},
+				},
+			})
+		p.Spec.VolumeMounts = append(p.Spec.VolumeMounts,
+			corev1.VolumeMount{
+				Name:      fmt.Sprintf("sonobuoy-%v-vol", p.SonobuoyConfig.PluginName),
+				MountPath: "/tmp/sonobuoy/config",
+			},
+		)
+	}
+
 	err = checkPluginsUnique(plugins)
 	if err != nil {
 		return nil, errors.Wrap(err, "plugin YAML generation")
@@ -190,11 +216,13 @@ func (*SonobuoyClient) GenerateManifest(cfg *GenConfig) ([]byte, error) {
 
 		// Often created from reading a file, this value could have trailing newline.
 		CustomRegistries: strings.TrimSpace(cfg.E2EConfig.CustomRegistries),
+
+		ConfigMaps: configs,
 	}
 
 	var buf bytes.Buffer
 
-	if err := templates.Manifest.Execute(&buf, tmplVals); err != nil {
+	if err := genManifest.Execute(&buf, tmplVals); err != nil {
 		return nil, errors.Wrap(err, "couldn't execute manifest template")
 	}
 
@@ -251,7 +279,7 @@ func SystemdLogsManifest(cfg *GenConfig) *manifest.Manifest {
 			Container: corev1.Container{
 				Name:            "systemd-logs",
 				Image:           cfg.SystemdLogsImage,
-				Command:         []string{"/bin/sh", "-c", `/get_systemd_logs.sh && while true; do echo "Sleeping for 1h to avoid daemonset restart"; sleep 3600; done`},
+				Command:         []string{"/bin/sh", "-c", `/get_systemd_logs.sh`},
 				ImagePullPolicy: corev1.PullPolicy(cfg.ImagePullPolicy),
 				Env: []corev1.EnvVar{
 					{Name: "CHROOT_DIR", Value: "/node"},

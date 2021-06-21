@@ -5,6 +5,7 @@ package integration
 import (
 	"bytes"
 	"context"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -28,6 +29,8 @@ const (
 var (
 	// Path to the Sonobuoy CLI
 	sonobuoy string
+
+	update = flag.Bool("update", false, "update .golden files")
 )
 
 func findSonobuoyCLI() (string, error) {
@@ -148,6 +151,48 @@ func TestSimpleRun(t *testing.T) {
 	mustRunSonobuoyCommandWithContext(ctx, t, args)
 }
 
+func TestRetrieveAndExtract(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer cancel()
+
+	ns, cleanup := getNamespace(t)
+	defer cleanup()
+
+	args := fmt.Sprintf("run --image-pull-policy IfNotPresent --wait -p testImage/yaml/job-junit-passing-singlefile.yaml -n %v", ns)
+	mustRunSonobuoyCommandWithContext(ctx, t, args)
+
+	// Create tmpdir and extract contents into it
+	tmpdir, err := ioutil.TempDir("", "TestRetrieveAndExtract")
+	if err != nil {
+		t.Fatal("Failed to create tmp dir")
+	}
+	defer os.RemoveAll(tmpdir)
+	args = fmt.Sprintf("retrieve %v -n %v --extract", tmpdir, ns)
+	mustRunSonobuoyCommandWithContext(ctx, t, args)
+
+	// Check that the files are there. Lots of ways to test this but I'm simply going to check that we have
+	// a "lot" of files.
+	files := []string{}
+	err = filepath.Walk(tmpdir,
+		func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			files = append(files, path)
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("Failed to walk path to check: %v", err)
+	}
+
+	// Verbose logging here in case we want to just see if certain files were found. Can remove
+	// this and just log on error if it is too much.
+	t.Logf("Extracted files:\n%v", strings.Join(files, "\n\t-"))
+	if len(files) < 20 {
+		t.Errorf("Expected many files to be extracted into %v, but only got %v", tmpdir, len(files))
+	}
+}
+
 // TestQuick runs a real "--mode quick" check against the cluster to ensure that it passes.
 func TestQuick(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
@@ -164,6 +209,29 @@ func TestQuick(t *testing.T) {
 	tb = saveToArtifacts(t, tb)
 
 	checkTarballPluginForErrors(t, tb, "e2e", 0)
+}
+
+func TestConfigmaps(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer cancel()
+
+	ns, cleanup := getNamespace(t)
+	defer cleanup()
+
+	args := fmt.Sprintf("run --image-pull-policy IfNotPresent --wait -p testImage/yaml/job-junit-singlefile-configmap.yaml -n %v", ns)
+	mustRunSonobuoyCommandWithContext(ctx, t, args)
+	tb := mustDownloadTarball(ctx, t, ns)
+	tb = saveToArtifacts(t, tb)
+
+	// Retrieve the sonobuoy results file from the tarball
+	resultsArgs := fmt.Sprintf("results %v --plugin %v --mode dump", tb, "job-junit-singlefile-configmap")
+	resultsYaml := mustRunSonobuoyCommandWithContext(ctx, t, resultsArgs)
+	var resultItem results.Item
+	yaml.Unmarshal(resultsYaml.Bytes(), &resultItem)
+	expectedStatus := "passed"
+	if resultItem.Status != expectedStatus {
+		t.Errorf("Expected plugin to have status: %v, got %v", expectedStatus, resultItem.Status)
+	}
 }
 
 func checkStatusForPluginErrors(ctx context.Context, t *testing.T, ns, plugin string, failCount int) {
@@ -377,4 +445,45 @@ func pwd(t *testing.T) string {
 		t.Fatalf("Unable to get pwd: %v", err)
 	}
 	return pwd
+}
+
+// TestExactOutput is to test things which can expect exact output; so do not use it
+// for things like configs which include timestamps or UUIDs.
+func TestExactOutput(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer cancel()
+
+	testCases := []struct {
+		desc       string
+		cmdLine    string
+		expectFile string
+	}{
+		{
+			desc:       "gen plugin e2e",
+			cmdLine:    "gen plugin e2e --kube-conformance-image-version=v123.456.789",
+			expectFile: "testdata/gen-plugin-e2e",
+		}, {
+			desc:       "gen plugin e2e respects configmap",
+			cmdLine:    "gen plugin e2e --kube-conformance-image-version=v123.456.789 --configmap=testdata/tiny-configmap.yaml",
+			expectFile: "testdata/gen-plugin-e2e-configmap",
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			output := mustRunSonobuoyCommandWithContext(ctx, t, tc.cmdLine)
+			if *update {
+				if err := os.WriteFile(tc.expectFile, output.Bytes(), 0666); err != nil {
+					t.Fatalf("Failed to update goldenfile: %v", err)
+				}
+			} else {
+				fileData, err := ioutil.ReadFile(tc.expectFile)
+				if err != nil {
+					t.Fatalf("Failed to read golden file %v: %v", tc.expectFile, err)
+				}
+				if !bytes.Equal(fileData, output.Bytes()) {
+					t.Errorf("Expected manifest to equal goldenfile: %v but instead got:\n\n%v", tc.expectFile, output.String())
+				}
+			}
+		})
+	}
 }

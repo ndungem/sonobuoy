@@ -136,12 +136,6 @@ func (p *Plugin) createPodDefinition(hostname string, cert *tls.Certificate, own
 		podSpec.Volumes = append(podSpec.Volumes, v.Volume)
 	}
 
-	// Default for jobs to run on linux. If a plugin can run on Windows (the more rare case)
-	// they should specify it in their podSpec. This should avoid more problems than it creates.
-	podSpec.NodeSelector = map[string]string{
-		"kubernetes.io/os": "linux",
-	}
-
 	pod.Spec = podSpec
 	return pod
 }
@@ -179,7 +173,7 @@ func (p *Plugin) Monitor(ctx context.Context, kubeclient kubernetes.Interface, _
 		case <-ctx.Done():
 			switch {
 			case ctx.Err() == context.DeadlineExceeded:
-				logrus.Errorf("Timeout waiting for plugin %v", p.GetName())
+				logrus.Errorf("Timeout waiting for plugin %v. Try checking the pod logs and other data in the results tarball for more information.", p.GetName())
 				resultsCh <- utils.MakeErrorResult(
 					p.GetName(),
 					map[string]interface{}{"error": plugin.TimeoutErrMsg},
